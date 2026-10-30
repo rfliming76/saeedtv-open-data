@@ -24,6 +24,11 @@ jobs:
         # A failed or thin answer keeps the committed file, so the published data never goes empty.
         continue-on-error: true
         run: python3 -I scripts/build_channels.py
+      - name: Build free-to-air TV lists from iptv-org
+        # Same rule: a thin run keeps the committed lists.
+        continue-on-error: true
+        timeout-minutes: 15
+        run: python3 -I scripts/build_tv.py
       - name: Commit refreshed data
         run: |
           git config user.name "saeedtv-open-data"
@@ -33,7 +38,7 @@ jobs:
       - name: Prepare site
         run: |
           mkdir -p _site && cp -r data _site/ && cp README.md _site/
-          printf '<!doctype html><meta charset="utf-8"><title>Saeed TV open data</title><p><a href="data/youtube-channels.json">data/youtube-channels.json</a></p>' > _site/index.html
+          printf '<!doctype html><meta charset="utf-8"><title>Saeed TV open data</title><p><a href="data/youtube-channels.json">data/youtube-channels.json</a></p><p><a href="data/tv/index.json">data/tv/index.json</a></p>' > _site/index.html
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
       - uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
