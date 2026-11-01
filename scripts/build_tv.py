@@ -1,9 +1,12 @@
 """Free-to-air TV streams by language, from the iptv-org open lists, checked to play in a web page.
 
-Writes data/tv/index.json (counts per language) and data/tv/<lang>.json (one list per language).
+Writes data/tv/index.json (counts per language), data/tv/<lang>.json (one list per language) and data/tv/iptv.json
+(every channel once, with its country and categories, for the Saeed TV «قنوات IPTV» page).
 A stream is kept only when it is https, its channel is not adult, closed or on the iptv-org blocklist,
 it needs no special user agent or referrer, and its playlist answers from a browser page on another site
 (status 200, an #EXTM3U playlist and a CORS header): those are the streams a browser can actually play.
+Streams iptv-org labels "Geo-blocked" are left out of the language lists and kept in iptv.json with a mark (flag 1), so the
+page can say so instead of showing them as working. Flag 2 = not on air all day ("Not 24/7").
 A thin run (under 300 playable streams) writes nothing, so the published lists never go empty.
 """
 import concurrent.futures as cf
@@ -92,17 +95,14 @@ def main():
         if c.get("is_nsfw") or c.get("closed") or cid in blocked:
             continue
         labels = [str(x).lower() for x in (s.get("labels") or [])]
-        if any("geo" in x for x in labels):
-            continue
+        geo = any("geo" in x for x in labels)
         fs = fl.get(cid, [])
         feed = next((f for f in fs if f.get("id") == s.get("feed")), None) or next((f for f in fs if f.get("is_main")), None)
         langs = (feed or {}).get("languages") or sorted({l for f in fs for l in (f.get("languages") or [])})
         langs = sorted({L3.get(l, l) for l in langs})
-        if not langs:
-            continue
         cand.append({"id": cid, "n": s.get("title") or c.get("name"), "u": url, "c": c.get("country") or "",
                      "cat": c.get("categories") or [], "q": s.get("quality") or "", "lg": langs,
-                     "logo": logos.get(cid) or "", "p": 0 if any("24/7" in x for x in labels) else 1})
+                     "logo": logos.get(cid) or "", "p": 0 if any("24/7" in x for x in labels) else 1, "g": geo})
     print("candidates", len(cand), file=sys.stderr)
 
     ok = []
@@ -118,6 +118,8 @@ def main():
     qn = lambda q: int("".join(ch for ch in q if ch.isdigit()) or 0)
     by = {}
     for x in sorted(ok, key=lambda x: -qn(x["q"])):
+        if x["g"]:
+            continue
         for l in x["lg"]:
             by.setdefault(l, {}).setdefault(x["id"], x)
     built = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -133,9 +135,22 @@ def main():
             json.dump({"built": built, "lang": l, "source": "iptv-org (CC0 / Unlicense)",
                        "channels": [[x["n"], x["u"], x["c"], x["cat"], x["q"], x["logo"], x["id"]] for x in rows]},
                       f, ensure_ascii=False, separators=(",", ":"))
+    # Every channel once: a stream without the geo mark first, then the best quality.
+    one = {}
+    for x in sorted(ok, key=lambda x: (x["g"], -qn(x["q"]))):
+        one.setdefault(x["id"], x)
+    rows = sorted(one.values(), key=lambda x: (x["c"], x["n"].lower()))
+    with open(os.path.join(OUT, "iptv.json"), "w", encoding="utf-8") as f:
+        json.dump({"built": built, "source": "iptv-org (CC0 / Unlicense)", "checked_from": ORIGIN,
+                   "fields": ["name", "url", "country", "categories", "quality", "logo", "id", "languages", "flags"],
+                   "flags": {"1": "geo-blocked outside its country (iptv-org label)", "2": "not 24/7"},
+                   "channels": [[x["n"], x["u"], x["c"], x["cat"], x["q"], x["logo"], x["id"], x["lg"],
+                                 (1 if x["g"] else 0) | (2 if x["p"] == 0 else 0)] for x in rows]},
+                  f, ensure_ascii=False, separators=(",", ":"))
     with open(os.path.join(OUT, "index.json"), "w", encoding="utf-8") as f:
         json.dump({"built": built, "source": "https://github.com/iptv-org/iptv", "checked_from": ORIGIN,
-                   "count": len({x["id"] for x in ok}), "languages": dict(sorted(counts.items(), key=lambda kv: -kv[1]))},
+                   "count": len({x["id"] for x in ok if not x["g"]}), "iptv": len(one), "geo_marked": sum(1 for x in one.values() if x["g"]),
+                   "languages": dict(sorted(counts.items(), key=lambda kv: -kv[1]))},
                   f, ensure_ascii=False, indent=1)
     print("languages", len(counts), "pl", counts.get("pl"), "ar", counts.get("ar"), file=sys.stderr)
 
